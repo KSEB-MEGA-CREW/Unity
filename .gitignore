@@ -1,0 +1,44 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE/Editor
+.vs/
+.idea/
+.vscode/
+
+# Unity generated
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+MemoryCaptures/
+*.pidb
+*.suo
+*.user
+*.userprefs
+*.csproj
+*.sln
+*.sln.DotSettings
+*.tmp
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# Packages cache
+Packages/PackageCache/
+Packages/manifest-temp.json
+
+# Artifacts
+*.apk
+*.aab
+*.unitypackage
+
+# JetBrains Rider
+Assets/Plugins/Editor/JetBrains*
