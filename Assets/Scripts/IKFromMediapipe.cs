@@ -1,4 +1,5 @@
-﻿using Newtonsoft.Json;
+﻿using System;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Collections;
 using System.Collections.Generic;
@@ -16,8 +17,11 @@ using UnityEditor;
 
 public class IKFromMediapipe : MonoBehaviour
 {
+    [Header("IK weight auto control")]
+    public bool autoIKWeightByData = true;
+    [Range(0f,10f)] public float ikFadeSpeed = 5f;
 
-    
+
     [Header("JSON (Drag & Drop here)")]
     [Tooltip("여기에 .json(TextAsset)을 드래그하면 그 파일을 우선 사용합니다.")]
     public TextAsset jsonAsset;
@@ -30,7 +34,7 @@ public class IKFromMediapipe : MonoBehaviour
     [Header("Inputs (fallback when no TextAsset)")]
     [Tooltip("TextAsset이 없을 때 사용할 StreamingAssets 상대 파일명(서브폴더 포함 가능). 예) \"Sub/clip.json\"")]
     public string jsonFileName = "VXPAKOKS240592420_공부1.json";
-    public Camera drivingCamera;
+    public Camera drivingCamera; // 좌표 계산 전용 카메라(렌더용 아님)
 
     [Header("IK Targets (from your Rig)")]
     public Transform leftTarget, leftHint;
@@ -148,36 +152,51 @@ public class IKFromMediapipe : MonoBehaviour
             _refAspect = drivingCamera.aspect;
         }
 
-        // 1) TextAsset → 2) ?json= URL → 3) StreamingAssets/jsonFileName
-        string sourceUrl = GetQuery("json");
-        string json = null;
+        // ── URL 쿼리 파싱: ?playlist=/StreamingAssets/a.json,/StreamingAssets/b.json
+        //                  또는 ?json=a.json,b.json  (콤마/세미콜론/파이프 모두 구분자 허용)
+        string playlistParam = GetQuery("playlist") ?? GetQuery("list") ?? GetQuery("jsons");
+        string jsonParam = GetQuery("json");
 
-        if (jsonAsset != null)
+        List<string> listFromQuery = null;
+        if (!string.IsNullOrEmpty(playlistParam)) listFromQuery = SplitList(playlistParam);
+        else if (!string.IsNullOrEmpty(jsonParam) && (jsonParam.Contains(",") || jsonParam.Contains("|") || jsonParam.Contains(";")))
+            listFromQuery = SplitList(jsonParam);
+
+        // ── 1) 플레이리스트(여러 JSON) 우선
+        if (listFromQuery != null && listFromQuery.Count > 0)
         {
-            json = jsonAsset.text;
-        }
-        else if (!string.IsNullOrEmpty(sourceUrl))
-        {
-            using var req = UnityWebRequest.Get(sourceUrl);
-            yield return req.SendWebRequest();
-            if (req.result != UnityWebRequest.Result.Success) { Debug.LogError(req.error); yield break; }
-            json = req.downloadHandler.text;
+            yield return StartCoroutine(LoadAndConcatJsons(listFromQuery));
+            if (frames == null || frames.Count == 0) yield break;
         }
         else
         {
-            // StreamingAssets 폴백
-            string local = System.IO.Path.Combine(Application.streamingAssetsPath, jsonFileName);
-#if !UNITY_ANDROID || UNITY_EDITOR
-            if (!local.StartsWith("file://")) local = "file://" + local; // 데스크톱/에디터: file:// 보장
-#endif
-            using var req = UnityWebRequest.Get(local);
-            yield return req.SendWebRequest();
-            if (req.result != UnityWebRequest.Result.Success) { Debug.LogError(req.error); yield break; }
-            json = req.downloadHandler.text;
-        }
+            // ── 2) TextAsset → 3) 단일 ?json= → 4) StreamingAssets 폴백(단일 파일)
+            string json = null;
 
-        // 파싱
-        if (!ParseAndApply(json)) yield break;
+            if (jsonAsset != null)
+            {
+                json = jsonAsset.text;
+            }
+            else if (!string.IsNullOrEmpty(jsonParam))
+            {
+                string url = ResolveJsonUrl(jsonParam);
+                using var req = UnityWebRequest.Get(url);
+                yield return req.SendWebRequest();
+                if (req.result != UnityWebRequest.Result.Success) { Debug.LogError(req.error); yield break; }
+                json = req.downloadHandler.text;
+            }
+            else
+            {
+                // StreamingAssets 폴백 (상대경로든 파일명만이든 모두 허용)
+                string url = ResolveJsonUrl(jsonFileName);
+                using var req = UnityWebRequest.Get(url);
+                yield return req.SendWebRequest();
+                if (req.result != UnityWebRequest.Result.Success) { Debug.LogError(req.error); yield break; }
+                json = req.downloadHandler.text;
+            }
+
+            if (!ParseAndApply(json)) yield break;
+        }
 
         // 필터 준비
         if (stabilizeLeftArm)
@@ -197,138 +216,159 @@ public class IKFromMediapipe : MonoBehaviour
         prevRT = rightTarget ? rightTarget.position : Vector3.zero;
     }
 
-    void Update()
+void Update()
+{
+    // ② 데이터/카메라가 없으면 팔 내리기(fade-out) 후 종료
+    if (frames == null || frames.Count == 0 || !drivingCamera)
     {
-        if (frames == null || frames.Count == 0 || !drivingCamera) return;
-
-        // 재생 인덱스 (속도조절)
-        t += Time.deltaTime * Mathf.Max(0.01f, playbackSpeed);
-        float step = 1f / Mathf.Max(1f, fps);
-        while (t >= step) { t -= step; fi = (fi + 1) % frames.Count; }
-
-        // 이웃 프레임 & 보간계수
-        int iA = fi;
-        int iB = (iA + 1) % frames.Count;
-        float alpha = interpolateFrames ? Mathf.Clamp01(t / step) : 0f;
-
-        var fA = frames[iA];
-        var fB = frames[iB];
-
-        // 보간된 입력 만들기
-        LM[] leftHand  = BlendLMsByName(fA.left_hand,  fB.left_hand,  alpha);
-        LM[] rightHand = BlendLMsByName(fA.right_hand, fB.right_hand, alpha);
-        LM[] pose      = BlendLMsByName(fA.pose,       fB.pose,       alpha);
-
-        var LmL = ToMapCI(leftHand);
-        var LmR = ToMapCI(rightHand);
-        var Pose = ToMapCI(pose);
-
-        // 21점 캐시 (손목 회전/손가락용) — 보간된 핸드 사용
-        _cachedLeft21  = driveLeftHand  ? Build21ByNames(leftHand,  wristDepth) : null;
-        _cachedRight21 = driveRightHand ? Build21ByNames(rightHand, wristDepth) : null;
-
-        float dt = Time.deltaTime;
-
-        // ── 손목 타깃 "원본" 위치(필터 적용 전)
-        Vector3? baseL = TryGetWristWorld(Pose, LmL, true);
-        Vector3? baseR = TryGetWristWorld(Pose, LmR, false);
-
-        // ── 팔 간격 보정(어깨-어깨 축 기준) — 양손 hand가 실제 있을 때만
-        if (applyArmSeparation &&
-            baseL.HasValue && baseR.HasValue &&
-            _cachedLeft21 != null && _cachedRight21 != null &&
-            Pose.TryGetValue("LEFT_SHOULDER", out var ls) &&
-            Pose.TryGetValue("RIGHT_SHOULDER", out var rs))
+        if (autoIKWeightByData)
         {
-            Vector3 shoulderL = ToWorld(drivingCamera, ls.x, ls.y, elbowDepth);
-            Vector3 shoulderR = ToWorld(drivingCamera, rs.x, rs.y, elbowDepth);
-            Vector3 axisLR = (shoulderL - shoulderR).normalized;
+            float spd = ikFadeSpeed * Time.deltaTime;
+            if (leftIK)  leftIK.weight  = Mathf.MoveTowards(leftIK.weight,  0f, spd);
+            if (rightIK) rightIK.weight = Mathf.MoveTowards(rightIK.weight, 0f, spd);
+        }
+        return;
+    }
 
-            if (separationOffset > 0f) {
-                baseL = baseL.Value + axisLR * separationOffset;
-                baseR = baseR.Value - axisLR * separationOffset;
+    // 재생 인덱스 (속도조절)
+    t += Time.deltaTime * Mathf.Max(0.01f, playbackSpeed);
+    float step = 1f / Mathf.Max(1f, fps);
+    while (t >= step) { t -= step; fi = (fi + 1) % frames.Count; }
+
+    // 이웃 프레임 & 보간계수
+    int iA = fi;
+    int iB = (iA + 1) % frames.Count;
+    float alpha = interpolateFrames ? Mathf.Clamp01(t / step) : 0f;
+
+    var fA = frames[iA];
+    var fB = frames[iB];
+
+    // 보간된 입력 만들기
+    LM[] leftHand  = BlendLMsByName(fA.left_hand,  fB.left_hand,  alpha);
+    LM[] rightHand = BlendLMsByName(fA.right_hand, fB.right_hand, alpha);
+    LM[] pose      = BlendLMsByName(fA.pose,       fB.pose,       alpha);
+
+    var LmL = ToMapCI(leftHand);
+    var LmR = ToMapCI(rightHand);
+    var Pose = ToMapCI(pose);
+
+    // 21점 캐시 (손목 회전/손가락용)
+    _cachedLeft21  = driveLeftHand  ? Build21ByNames(leftHand,  wristDepth) : null;
+    _cachedRight21 = driveRightHand ? Build21ByNames(rightHand, wristDepth) : null;
+
+    float dt = Time.deltaTime;
+
+    // ── 손목 타깃 "원본" 위치(필터 적용 전)
+    Vector3? baseL = TryGetWristWorld(Pose, LmL, true);
+    Vector3? baseR = TryGetWristWorld(Pose, LmR, false);
+
+    // ── 팔 간격 보정(어깨-어깨 축 기준)
+    if (applyArmSeparation &&
+        baseL.HasValue && baseR.HasValue &&
+        _cachedLeft21 != null && _cachedRight21 != null &&
+        Pose.TryGetValue("LEFT_SHOULDER", out var ls) &&
+        Pose.TryGetValue("RIGHT_SHOULDER", out var rs))
+    {
+        Vector3 shoulderL = ToWorld(drivingCamera, ls.x, ls.y, elbowDepth);
+        Vector3 shoulderR = ToWorld(drivingCamera, rs.x, rs.y, elbowDepth);
+        Vector3 axisLR = (shoulderL - shoulderR).normalized;
+
+        if (separationOffset > 0f) {
+            baseL = baseL.Value + axisLR * separationOffset;
+            baseR = baseR.Value - axisLR * separationOffset;
+        }
+        if (useDesiredHandGap) {
+            float currGap = Mathf.Abs(Vector3.Dot((baseL.Value - baseR.Value), axisLR));
+            float delta = desiredHandGap - currGap;
+            if (Mathf.Abs(delta) > 1e-4f) {
+                baseL = baseL.Value + axisLR * (0.5f * delta);
+                baseR = baseR.Value - axisLR * (0.5f * delta);
             }
-            if (useDesiredHandGap) {
-                float currGap = Mathf.Abs(Vector3.Dot((baseL.Value - baseR.Value), axisLR));
-                float delta = desiredHandGap - currGap;
-                if (Mathf.Abs(delta) > 1e-4f) {
-                    baseL = baseL.Value + axisLR * (0.5f * delta);
-                    baseR = baseR.Value - axisLR * (0.5f * delta);
-                }
-            }
-        }
-
-        // ── 위치 필터링 + 적용
-        if (leftTarget && baseL.HasValue)
-        {
-            var p = baseL.Value;
-            if (stabilizeLeftArm && leftPosF != null) p = leftPosF.Filter(p, dt);
-            leftTarget.position = p;
-        }
-        if (rightTarget && baseR.HasValue)
-        {
-            var p = baseR.Value;
-            if (stabilizeRightArm && rightPosF != null) p = rightPosF.Filter(p, dt);
-            rightTarget.position = p;
-        }
-
-        // ── 손목 타깃 회전 (보간된 21점 + 선택적 스무딩)
-        if (leftTarget && _cachedLeft21 != null)
-        {
-            var rotL = ComputeWristRotationFrom21(_cachedLeft21,  true,  leftShowsBackOfHand,  ref _prevPalmN_L)
-         * Quaternion.Euler(leftWristEulerOffset);
-            if (Mathf.Abs(leftWristRollDeg) > 0.001f)
-                rotL = Quaternion.AngleAxis(leftWristRollDeg, rotL * Vector3.forward) * rotL;
-
-            if (smoothWristRotation)
-            {
-                if (!_hasPrevLeftRot) { _prevLeftRot = rotL; _hasPrevLeftRot = true; }
-                else rotL = Quaternion.Slerp(_prevLeftRot, rotL, wristRotSlerp);
-                _prevLeftRot = rotL;
-            }
-            leftTarget.rotation = rotL;
-        }
-        if (rightTarget && _cachedRight21 != null)
-        {
-            var rotR = ComputeWristRotationFrom21(_cachedRight21, false, rightShowsBackOfHand, ref _prevPalmN_R)
-         * Quaternion.Euler(rightWristEulerOffset);
-            if (Mathf.Abs(rightWristRollDeg) > 0.001f)
-                rotR = Quaternion.AngleAxis(rightWristRollDeg, rotR * Vector3.forward) * rotR;
-
-            if (smoothWristRotation)
-            {
-                if (!_hasPrevRightRot) { _prevRightRot = rotR; _hasPrevRightRot = true; }
-                else rotR = Quaternion.Slerp(_prevRightRot, rotR, wristRotSlerp);
-                _prevRightRot = rotR;
-            }
-            rightTarget.rotation = rotR;
-        }
-
-        // ── 팔꿈치 힌트 (필터링 + 플립 방지)
-        if (leftHint && Pose.TryGetValue("LEFT_SHOULDER", out var ls2) &&
-                        Pose.TryGetValue("LEFT_ELBOW", out var le) &&
-                        Pose.TryGetValue("LEFT_WRIST", out var lwPose))
-        {
-            var hint = ComputeElbowHintStable(true, new Vector2(ls2.x, ls2.y), new Vector2(le.x, le.y), new Vector2(lwPose.x, lwPose.y));
-            if (stabilizeLeftArm && leftHintF != null) hint = leftHintF.Filter(hint, dt);
-            leftHint.position = hint;
-        }
-        if (rightHint && Pose.TryGetValue("RIGHT_SHOULDER", out var rs2) &&
-                         Pose.TryGetValue("RIGHT_ELBOW", out var re) &&
-                         Pose.TryGetValue("RIGHT_WRIST", out var rwPose))
-        {
-            var hint = ComputeElbowHintStable(false, new Vector2(rs2.x, rs2.y), new Vector2(re.x, re.y), new Vector2(rwPose.x, rwPose.y));
-            if (stabilizeRightArm && rightHintF != null) hint = rightHintF.Filter(hint, dt);
-            rightHint.position = hint;
-        }
-
-        // ── 디버그
-        if (logTargetMotion)
-        {
-            if (leftTarget) { float d = Vector3.Distance(prevLT, leftTarget.position); if (d > 1e-4f) Debug.Log($"[IK] LeftTarget {d:F3} m"); prevLT = leftTarget.position; }
-            if (rightTarget) { float d = Vector3.Distance(prevRT, rightTarget.position); if (d > 1e-4f) Debug.Log($"[IK] RightTarget {d:F3} m"); prevRT = rightTarget.position; }
         }
     }
+
+    // ③ 데이터 존재 여부에 따라 IK weight를 서서히 올리기/내리기
+    if (autoIKWeightByData)
+    {
+        float spd = ikFadeSpeed * Time.deltaTime;
+        float wL = baseL.HasValue ? 1f : 0f;
+        float wR = baseR.HasValue ? 1f : 0f;
+        if (leftIK)  leftIK.weight  = Mathf.MoveTowards(leftIK.weight,  wL, spd);
+        if (rightIK) rightIK.weight = Mathf.MoveTowards(rightIK.weight, wR, spd);
+    }
+
+    // ── 위치 필터링 + 적용
+    if (leftTarget && baseL.HasValue)
+    {
+        var p = baseL.Value;
+        if (stabilizeLeftArm && leftPosF != null) p = leftPosF.Filter(p, dt);
+        leftTarget.position = p;
+    }
+    if (rightTarget && baseR.HasValue)
+    {
+        var p = baseR.Value;
+        if (stabilizeRightArm && rightPosF != null) p = rightPosF.Filter(p, dt);
+        rightTarget.position = p;
+    }
+
+    // ── 손목 타깃 회전 (보간된 21점 + 선택적 스무딩)
+    if (leftTarget && _cachedLeft21 != null)
+    {
+        var rotL = ComputeWristRotationFrom21(_cachedLeft21,  true,  leftShowsBackOfHand,  ref _prevPalmN_L)
+                 * Quaternion.Euler(leftWristEulerOffset);
+        if (Mathf.Abs(leftWristRollDeg) > 0.001f)
+            rotL = Quaternion.AngleAxis(leftWristRollDeg, rotL * Vector3.forward) * rotL;
+
+        if (smoothWristRotation)
+        {
+            if (!_hasPrevLeftRot) { _prevLeftRot = rotL; _hasPrevLeftRot = true; }
+            else rotL = Quaternion.Slerp(_prevLeftRot, rotL, wristRotSlerp);
+            _prevLeftRot = rotL;
+        }
+        leftTarget.rotation = rotL;
+    }
+    if (rightTarget && _cachedRight21 != null)
+    {
+        var rotR = ComputeWristRotationFrom21(_cachedRight21, false, rightShowsBackOfHand, ref _prevPalmN_R)
+                 * Quaternion.Euler(rightWristEulerOffset);
+        if (Mathf.Abs(rightWristRollDeg) > 0.001f)
+            rotR = Quaternion.AngleAxis(rightWristRollDeg, rotR * Vector3.forward) * rotR;
+
+        if (smoothWristRotation)
+        {
+            if (!_hasPrevRightRot) { _prevRightRot = rotR; _hasPrevRightRot = true; }
+            else rotR = Quaternion.Slerp(_prevRightRot, rotR, wristRotSlerp);
+            _prevRightRot = rotR;
+        }
+        rightTarget.rotation = rotR;
+    }
+
+    // ── 팔꿈치 힌트 (필터링 + 플립 방지)
+    if (leftHint && Pose.TryGetValue("LEFT_SHOULDER", out var ls2) &&
+                    Pose.TryGetValue("LEFT_ELBOW", out var le) &&
+                    Pose.TryGetValue("LEFT_WRIST", out var lwPose))
+    {
+        var hint = ComputeElbowHintStable(true, new Vector2(ls2.x, ls2.y), new Vector2(le.x, le.y), new Vector2(lwPose.x, lwPose.y));
+        if (stabilizeLeftArm && leftHintF != null) hint = leftHintF.Filter(hint, dt);
+        leftHint.position = hint;
+    }
+    if (rightHint && Pose.TryGetValue("RIGHT_SHOULDER", out var rs2) &&
+                     Pose.TryGetValue("RIGHT_ELBOW", out var re) &&
+                     Pose.TryGetValue("RIGHT_WRIST", out var rwPose))
+    {
+        var hint = ComputeElbowHintStable(false, new Vector2(rs2.x, rs2.y), new Vector2(re.x, re.y), new Vector2(rwPose.x, rwPose.y));
+        if (stabilizeRightArm && rightHintF != null) hint = rightHintF.Filter(hint, dt);
+        rightHint.position = hint;
+    }
+
+    // ── 디버그
+    if (logTargetMotion)
+    {
+        if (leftTarget) { float d = Vector3.Distance(prevLT, leftTarget.position); if (d > 1e-4f) Debug.Log($"[IK] LeftTarget {d:F3} m"); prevLT = leftTarget.position; }
+        if (rightTarget){ float d = Vector3.Distance(prevRT, rightTarget.position); if (d > 1e-4f) Debug.Log($"[IK] RightTarget {d:F3} m"); prevRT = rightTarget.position; }
+    }
+}
+
 
     // 손가락은 애니메이터/리그 평가 이후에 덮어쓰기
     void LateUpdate()
@@ -347,6 +387,116 @@ public class IKFromMediapipe : MonoBehaviour
         Debug.Log($"[IK] JSON loaded via string: {frames.Count} frames");
     }
     public void LoadFromJsonTextJS(string json) => LoadFromJsonText(json); // SendMessage용
+
+    // ─────────────────────── Playlist/멀티 JSON 지원 ───────────────────────
+    IEnumerator LoadAndConcatJsons(List<string> sources)
+    {
+        var all = new List<Frame>();
+        float firstClipFps = fps;
+
+        for (int i = 0; i < sources.Count; i++)
+        {
+            string url = ResolveJsonUrl(sources[i]);
+            using var req = UnityWebRequest.Get(url);
+            yield return req.SendWebRequest();
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogError($"JSON load failed: {sources[i]} → {req.error}");
+                yield break;
+            }
+
+            float clipFps;
+            var clipFrames = ParseFramesOnly(req.downloadHandler.text, out clipFps);
+            if (clipFrames == null || clipFrames.Count == 0)
+            {
+                Debug.LogError($"No frames in {sources[i]}");
+                yield break;
+            }
+
+            if (i == 0 && clipFps > 0) firstClipFps = clipFps;
+
+            // 연결부 살짝 홀드(튐 완화)
+            if (all.Count > 0)
+                all.Add(all[all.Count - 1]);
+
+            all.AddRange(clipFrames);
+        }
+
+        frames = all;
+        fps = firstClipFps; // 첫 클립 FPS 기준(필요시 정책 변경)
+        fi = 0; t = 0;
+        Debug.Log($"[IK] Concatenated {sources.Count} clip(s), total frames = {frames.Count}, fps = {fps}");
+    }
+
+    List<Frame> ParseFramesOnly(string json, out float clipFps)
+    {
+        clipFps = 0f;
+        if (string.IsNullOrEmpty(json)) return null;
+
+        try
+        {
+            char first = json.SkipWhile(char.IsWhiteSpace).FirstOrDefault();
+            if (first == '[')
+            {
+                return JsonConvert.DeserializeObject<List<Frame>>(json);
+            }
+            else if (first == '{')
+            {
+                var r = JsonConvert.DeserializeObject<SegmentRoot>(json);
+                if (r != null && r.fps_sampled > 0) clipFps = r.fps_sampled;
+                return r?.frames ?? new List<Frame>();
+            }
+            else
+            {
+                var jo = JObject.Parse(json);
+                clipFps = jo.Value<float?>("fps_sampled") ?? 0f;
+                return jo["frames"]?.ToObject<List<Frame>>() ?? new List<Frame> ();
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"ParseFramesOnly failed: {e.Message}");
+            return null;
+        }
+    }
+
+    List<string> SplitList(string s)
+    {
+        var arr = s.Split(new[] { ',', '|', ';' }, StringSplitOptions.RemoveEmptyEntries);
+        var list = new List<string>(arr.Length);
+        foreach (var raw in arr)
+        {
+            var x = raw.Trim();
+            if (!string.IsNullOrEmpty(x)) list.Add(x);
+        }
+        return list;
+    }
+
+    string ResolveJsonUrl(string src)
+    {
+        if (string.IsNullOrEmpty(src)) return null;
+        src = src.Trim();
+
+        // 이미 http(s)면 그대로
+        if (src.Contains("://")) return src;
+
+        // "StreamingAssets/..." 또는 파일명만 들어온 경우 모두 허용
+        string rel = src;
+        const string SA = "StreamingAssets/";
+        if (rel.StartsWith(SA, StringComparison.OrdinalIgnoreCase))
+            rel = rel.Substring(SA.Length);
+
+        string path = System.IO.Path.Combine(Application.streamingAssetsPath, rel);
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // WebGL: file:// 금지, 빌드가 제공하는 URL을 그대로 사용
+        return path; // 예: "StreamingAssets/clip.json" 또는 빌드 경로 기반 URL
+#else
+        if (!path.StartsWith("file://")) path = "file://" + path;
+        return path;
+#endif
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     // ───────────────── Wrist rotation from 21 points ─────────────────
     Quaternion ComputeWristRotationFrom21(Vector3[] mpWorld, bool isLeft, bool showBackOfHand, ref Vector3 prevN)
@@ -542,15 +692,11 @@ public class IKFromMediapipe : MonoBehaviour
         if (leftIK)
         {
             var d = leftIK.data; if (leftTarget) d.target = leftTarget; if (leftHint) d.hint = leftHint;
-            //d.maintainTargetPositionOffset = false; d.maintainTargetRotationOffset = false;
-            //d.targetPositionWeight = 1; d.targetRotationWeight = 1; d.hintWeight = 1;
             leftIK.data = d;
         }
         if (rightIK)
         {
             var d = rightIK.data; if (rightTarget) d.target = rightTarget; if (rightHint) d.hint = rightHint;
-            //d.maintainTargetPositionOffset = false; d.maintainTargetRotationOffset = false;
-            //d.targetPositionWeight = 1; d.targetRotationWeight = 1; d.hintWeight = 1;
             rightIK.data = d;
         }
     }

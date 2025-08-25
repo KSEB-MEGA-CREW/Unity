@@ -69,8 +69,8 @@ MonoBehaviour:
     - line: '|   m_HolographicTrackingLossScreen: {instanceID: 0}'
     - line: '|   defaultScreenWidth: 1024'
     - line: '|   defaultScreenHeight: 768'
-    - line: '|   defaultScreenWidthWeb: 960'
-    - line: '|   defaultScreenHeightWeb: 600'
+    - line: '|   defaultScreenWidthWeb: 1920'
+    - line: '|   defaultScreenHeightWeb: 1080'
     - line: '|   m_StereoRenderingPath: 0'
     - line: '|   m_ActiveColorSpace: 1'
     - line: '|   unsupportedMSAAFallback: 0'
@@ -563,7 +563,8 @@ MonoBehaviour:
     - line: '|   openGLRequireES31: 0'
     - line: '|   openGLRequireES31AEP: 0'
     - line: '|   openGLRequireES32: 0'
-    - line: '|   m_TemplateCustomTags: {}'
+    - line: '|   m_TemplateCustomTags:'
+    - line: '|     PRODUCT_DESCRIPTION: '
     - line: '|   mobileMTRendering:'
     - line: '|     Android: 1'
     - line: '|     iPhone: 1'
@@ -823,7 +824,7 @@ MonoBehaviour:
     - line: '|   blurSplashScreenBackground: 1'
     - line: '|   spritePackerPolicy: '
     - line: '|   webGLMemorySize: 32'
-    - line: '|   webGLExceptionSupport: 0'
+    - line: '|   webGLExceptionSupport: 1'
     - line: '|   webGLNameFilesAsHashes: 1'
     - line: '|   webGLShowDiagnostics: 0'
     - line: '|   webGLDataCaching: 1'
@@ -837,7 +838,7 @@ MonoBehaviour:
     - line: '|   webGLWasmArithmeticExceptions: 0'
     - line: '|   webGLLinkerTarget: 1'
     - line: '|   webGLThreadsSupport: 0'
-    - line: '|   webGLDecompressionFallback: 0'
+    - line: '|   webGLDecompressionFallback: 1'
     - line: '|   webGLInitialMemorySize: 128'
     - line: '|   webGLMaximumMemorySize: 2048'
     - line: '|   webGLMemoryGrowthMode: 2'
@@ -990,7 +991,7 @@ MonoBehaviour:
     - rid: 4360448164015898686
       type: {class: WebGLPlatformSettings, ns: UnityEditor.WebGL, asm: UnityEditor.WebGL.Extensions}
       data:
-        m_Development: 0
+        m_Development: 1
         m_ConnectProfiler: 0
         m_BuildWithDeepProfilingSupport: 0
         m_AllowDebugging: 0
