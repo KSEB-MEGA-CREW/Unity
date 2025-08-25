@@ -126,6 +126,9 @@ public class IKFromMediapipe : MonoBehaviour
     // 엘보 노멀 연속성
     Vector3 _prevLeftN = Vector3.zero, _prevRightN = Vector3.zero;
 
+    // 손바닥 법선 연속성
+    Vector3 _prevPalmN_L = Vector3.zero, _prevPalmN_R = Vector3.zero;
+
     // 회전 스무딩 캐시
     Quaternion _prevLeftRot, _prevRightRot;
     bool _hasPrevLeftRot = false, _hasPrevRightRot = false;
@@ -270,8 +273,8 @@ public class IKFromMediapipe : MonoBehaviour
         // ── 손목 타깃 회전 (보간된 21점 + 선택적 스무딩)
         if (leftTarget && _cachedLeft21 != null)
         {
-            var rotL = ComputeWristRotationFrom21(_cachedLeft21, true, leftShowsBackOfHand)
-                     * Quaternion.Euler(leftWristEulerOffset);
+            var rotL = ComputeWristRotationFrom21(_cachedLeft21,  true,  leftShowsBackOfHand,  ref _prevPalmN_L)
+         * Quaternion.Euler(leftWristEulerOffset);
             if (Mathf.Abs(leftWristRollDeg) > 0.001f)
                 rotL = Quaternion.AngleAxis(leftWristRollDeg, rotL * Vector3.forward) * rotL;
 
@@ -285,8 +288,8 @@ public class IKFromMediapipe : MonoBehaviour
         }
         if (rightTarget && _cachedRight21 != null)
         {
-            var rotR = ComputeWristRotationFrom21(_cachedRight21, false, rightShowsBackOfHand)
-                     * Quaternion.Euler(rightWristEulerOffset);
+            var rotR = ComputeWristRotationFrom21(_cachedRight21, false, rightShowsBackOfHand, ref _prevPalmN_R)
+         * Quaternion.Euler(rightWristEulerOffset);
             if (Mathf.Abs(rightWristRollDeg) > 0.001f)
                 rotR = Quaternion.AngleAxis(rightWristRollDeg, rotR * Vector3.forward) * rotR;
 
@@ -344,23 +347,35 @@ public class IKFromMediapipe : MonoBehaviour
     public void LoadFromJsonTextJS(string json) => LoadFromJsonText(json); // SendMessage용
 
     // ───────────────── Wrist rotation from 21 points ─────────────────
-    Quaternion ComputeWristRotationFrom21(Vector3[] mpWorld, bool isLeft, bool showBackOfHand)
+    Quaternion ComputeWristRotationFrom21(Vector3[] mpWorld, bool isLeft, bool showBackOfHand, ref Vector3 prevN)
     {
         // MediaPipe: 0 WRIST, 5 INDEX_MCP, 9 MIDDLE_MCP, 17 PINKY_MCP
         Vector3 wrist = mpWorld[0];
-        Vector3 idx = mpWorld[5];
-        Vector3 mid = mpWorld[9];
-        Vector3 pnk = mpWorld[17];
+        Vector3 idx   = mpWorld[5];
+        Vector3 mid   = mpWorld[9];
+        Vector3 pnk   = mpWorld[17];
 
-        Vector3 across = (idx - pnk).normalized;   // 손바닥 가로축
-        if (isLeft) across = -across;               // 좌/우 보정
-        Vector3 forward = (mid - wrist).normalized; // 손바닥 앞축
-        Vector3 normal = Vector3.Cross(across, forward).normalized; // 손바닥 법선(Y)
-        if (normal.sqrMagnitude < 1e-8f) normal = Vector3.up;
-        if (showBackOfHand) normal = -normal;       // 손등 보이도록 법선 반전
+        Vector3 across  = (idx - pnk).normalized;       // 손바닥 가로축
+        if (isLeft) across = -across;                   // 좌/우 보정
+        Vector3 forward = (mid - wrist).normalized;     // 손바닥 앞축
+        Vector3 normal  = Vector3.Cross(across, forward);
 
-        // LookRotation: Z=forward, Y=up(normal)
-        return Quaternion.LookRotation(forward, normal);
+        // 퇴화(손 모아지거나 직선에 가까움) → 이전 법선 사용
+        if (normal.sqrMagnitude < 1e-8f)
+            normal = (prevN.sqrMagnitude > 0.0001f) ? prevN : Vector3.up;
+        else
+            normal.Normalize();
+
+        if (showBackOfHand) normal = -normal;
+
+        // ★ 법선 부호 연속성(플립 방지)
+        if (prevN.sqrMagnitude > 0.0001f && Vector3.Dot(prevN, normal) < 0f)
+            normal = -normal;
+
+        // 약간의 관성(부드럽게 따라옴)
+        prevN = (prevN.sqrMagnitude < 0.0001f) ? normal : Vector3.Slerp(prevN, normal, 0.5f);
+
+        return Quaternion.LookRotation(forward, normal); // Z=forward, Y=normal
     }
 
     // ───────────────── 보간 유틸 ─────────────────
@@ -525,15 +540,15 @@ public class IKFromMediapipe : MonoBehaviour
         if (leftIK)
         {
             var d = leftIK.data; if (leftTarget) d.target = leftTarget; if (leftHint) d.hint = leftHint;
-            d.maintainTargetPositionOffset = false; d.maintainTargetRotationOffset = false;
-            d.targetPositionWeight = 1; d.targetRotationWeight = 1; d.hintWeight = 1;
+            //d.maintainTargetPositionOffset = false; d.maintainTargetRotationOffset = false;
+            //d.targetPositionWeight = 1; d.targetRotationWeight = 1; d.hintWeight = 1;
             leftIK.data = d;
         }
         if (rightIK)
         {
             var d = rightIK.data; if (rightTarget) d.target = rightTarget; if (rightHint) d.hint = rightHint;
-            d.maintainTargetPositionOffset = false; d.maintainTargetRotationOffset = false;
-            d.targetPositionWeight = 1; d.targetRotationWeight = 1; d.hintWeight = 1;
+            //d.maintainTargetPositionOffset = false; d.maintainTargetRotationOffset = false;
+            //d.targetPositionWeight = 1; d.targetRotationWeight = 1; d.hintWeight = 1;
             rightIK.data = d;
         }
     }

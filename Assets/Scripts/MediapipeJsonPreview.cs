@@ -1,5 +1,6 @@
 // MediapipeJsonPreview.cs
 // Attach to your RenderCamera (Game view overlay) – also draws 3D gizmos in Scene view.
+#if !UNITY_WEBGL || UNITY_EDITOR
 using UnityEngine;
 using UnityEngine.Networking;
 using System.Collections;
@@ -554,3 +555,4 @@ public class MediapipeJsonPreview : MonoBehaviour
 #endif
     }
 }
+#endif
