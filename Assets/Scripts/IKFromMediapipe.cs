@@ -16,6 +16,8 @@ using UnityEditor;
 
 public class IKFromMediapipe : MonoBehaviour
 {
+
+    
     [Header("JSON (Drag & Drop here)")]
     [Tooltip("여기에 .json(TextAsset)을 드래그하면 그 파일을 우선 사용합니다.")]
     public TextAsset jsonAsset;
