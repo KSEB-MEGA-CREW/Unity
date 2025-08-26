@@ -1,4 +1,6 @@
-현재까지 build_가 최종입니다.
+*build_는 asset파일에 있는 json으로 동작
+*build_api는 ai 서버에서 오는 api로 json받아서 동작
+*build_사용법
 위치는 build_로 가셔서 cmd창에서 python -m http.server 8000 --bind 127.0.0.1로 서버를 열어줍니다.
 그 다음, 동작시키고 싶은 아바타를 확인하기 위해 다음을 입력하면 됩니다. 
 
@@ -22,3 +24,6 @@ http://127.0.0.1:8000/index.html?playlist=StreamingAssets/fix_VXPAKOKS240141510_
 
 ex) 나는 기뻐요.(지시2+재미1)
 http://127.0.0.1:8000/index.html?playlist=StreamingAssets/fix_VXPAKOKS240069810_jishi2.json,fix_VXPAKOKS240000060_jaemi1.json
+
+
+
