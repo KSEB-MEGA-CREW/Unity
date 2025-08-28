@@ -13,9 +13,13 @@ MediaPipe 기반 좌표(JSON)를 Unity 씬에서 재생하고, TwoBoneIK + 손�
 
 ## 📂 프로젝트 구조
 Unity/
+
 ├─ Assets/ # 씬, 스크립트, 프리팹, 리그
+
 ├─ Packages/
+
 ├─ ProjectSettings/
+
 └─ UserSettings/
 
 
