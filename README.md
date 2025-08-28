@@ -59,9 +59,10 @@ Unity/
    - **파일명**을 입력해 사용
 
 > JSON은 MediaPipe Holistic 형식의 `frames` 배열을 포함해야 합니다.
-> SignDriver의 Inspector는 아래를 참고하시면 됩니다.
-> ![Uploading image.png…]()
 
+> SignDriver의 Inspector는 아래를 참고하시면 됩니다.
+
+<img width="988" height="4086" alt="inspector" src="https://github.com/user-attachments/assets/87067d61-e6db-4bd7-bd69-007317fcd7f5" />
 
 ---
 
